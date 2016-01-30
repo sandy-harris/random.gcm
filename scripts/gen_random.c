@@ -129,14 +129,10 @@ int main(int argc, char **argv)
  * chose to initialise all eight with random data.
  *
  * Any of those choices might be changed, but all seem reasonable.
- *
- * Add an extra 8 words for a counter used in the hashing
- * 128-bit counter with some extra data for mixing
  */
 	printf("#define ARRAY_WORDS %d\n\n", ARRAY_WORDS) ;
 
-	do_block( (ARRAY_WORDS + 8), "constants" ) ;
-	printf("static u32 *counter = constants + ARRAY_WORDS ;\n") ;
+	do_block( ARRAY_WORDS, "constants" ) ;
 
 #endif /* CONFIG_RANDOM_GCM */
 
