@@ -3516,25 +3516,9 @@ static void buffer2counter( u32 *data )
 	 * every call different
 	 */
 	counter[0] ^= jiffies ;
-	/*
-	 * mix all 8 words in counter[] array
-	 * this and top_mix() are the only things
-	 * that change the high 4 words
-	 */
-	pht256( counter ) ;
-	/*
-	 * input data mixed into low 4 words of counter[]
-	 * which are the actual 128-bit counter
-	 *
-	 * high 4 words are multiplier in GCM mixing
-	 * this is the only place they are used
-	 */
-	addmul( (u8 *) counter, (u8 *) data, 16, (u8 *) (counter+4) ) ;
-	/*
-	 * make the mixing non-invertible
-	 * see reference to Preneel et al. in comment for mix_last()
-	 */
+
 	xor128( counter, data ) ;
+	pht128( counter ) ;
 
 	loop_count = 0 ;
 	iter_count = 0 ;
