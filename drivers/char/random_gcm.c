@@ -2031,6 +2031,8 @@ EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
 static spinlock_t counter_lock ;
 static spinlock_t constants_lock ;
 
+static u32 counter[4] ;
+
 /*********************************************************
  * unidirectional mixing operations
  *
@@ -2428,32 +2430,6 @@ static void big_mix()
 	}
 	/* This should definitely never be reached */
 	else	pr_warn("random: strange output pool size %d\n", OUTPUT_POOL_WORDS ) ;
-}
-
-/*
- * constants[] array has 10 128-bit rows
- * 8 are pool constants, last 2 counter[]
- *
- * mix the last 4 rows
- *   8 words in counter[]
- *   8 words of constants[] for dummy_pool
- *
- * no rotations needed here; count() has enough
- */
-static void top_mix()
-{
-	u32 *x ;
-	struct entropy_store *d ;
-	unsigned long flags1, flags2 ;
-
-	d = &dummy_pool ;
-	x = d->A ;
-
-	spin_lock_irqsave( &d->lock, flags1 ) ;
-	spin_lock_irqsave( &constants_lock, flags2 ) ;
-	pht512( x ) ;
-	spin_unlock_irqrestore( &constants_lock, flags2 ) ;
-	spin_unlock_irqrestore( &d->lock, flags1 ) ;
 }
 
 /**********************************************************************
@@ -2934,7 +2910,7 @@ static int get_any( u32 *out )
  * for dummy or nonblocking, it will not
  */
 
-static u32 rekey_flip_flop = 0 ;
+static u32 rekey_count = 0 ;
 
 static void get128( struct entropy_store *r, u32 *out )
 {
@@ -2996,32 +2972,33 @@ static void get128( struct entropy_store *r, u32 *out )
 		 * Rekeying is infrequent enough (once
 		 * every SAFE_OUT blocks) that we can
 		 * afford a somewhat expensive mix here
-		 *
-		 * constants[] has 10 128-bits rows
-		 * 8 for pool constants, 2 for counter[]
-		 *
-		 * mix_const_all() mixes first 8 rows
-		 * top_mix() mixes last 4
-		 * they overlap so all 10 get mixed
-		 * if both are used
 		 */
-		if( rekey_flip_flop )	{
-			/*
-			 * Mix all the pool constants
-			 * so the rekey affects all pools
-			 * This is the only full mix except
-			 * during initialisation
-			 */
-			mix_const_all() ;
-			rekey_flip_flop = 0 ;
-		}
-		else	{
-			/*
-			 * mix counter[]
-			 * and constants for dummy pool  
-			 */
-			top_mix() ;
-			rekey_flip_flop = 1 ;
+		switch( rekey_count )	{
+			/* do nothing here, only 128 bits since last mix */
+			case 0: case 2: case 4: case 6: case 8: case 10: case 12:
+				rekey_count++ ;
+				break ;
+			/* 256 bits mixed in since last mix */	 
+			case 1: case 5: case 9:
+				/* mix constants for blocking & non-blocking */
+				pht512(blocking_pool.A) ;
+				rekey_count++ ;
+				break ;
+			case 3: case 7: case 11:
+				/* mix constants for non-blocking & dummy */
+				pht512(r->A) ;
+				rekey_count++ ;
+				break ;
+			default:
+				/*
+				 * Mix all the pool constants
+				 * so the rekey affects all pools
+				 * This is the only full mix except
+				 * during initialisation
+				 */
+				mix_const_all() ;
+				rekey_count = 0 ;
+				break ;
 		}
 
 		/* produce output */
