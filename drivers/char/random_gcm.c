@@ -574,7 +574,6 @@ static int load_input(void) ;
 /* mix chunks of data structures in place */
 static void mix_const_p( struct entropy_store * ) ;
 static void mix_const_all(void);
-static void top_mix(void);
 static void big_mix(void);
 
 static void clear_addmul(void);
@@ -2028,10 +2027,19 @@ EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
  * would be of much value.
  */
 
+/*
+ * declare counter[] as a global since several routines
+ * use it, initialise with five constants from SHA-1
+ *
+ * these values in counter[] are used only once
+ * the very first output generated is then mixed in
+ * after that, counter[] should be random
+ */
+#define COUNTER_DELTA 0x67452301
+static u32 counter[] = {0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0} ;
+
 static spinlock_t counter_lock ;
 static spinlock_t constants_lock ;
-
-static u32 counter[4] ;
 
 /*********************************************************
  * unidirectional mixing operations
@@ -2359,6 +2367,26 @@ static void buffer2array( struct entropy_store *r, u32 *data )
 }
 
 /*
+ * mix the four 128-bit constants[] for two pools
+ * *r and next one in constants[] array
+ * in place mixing, uses no external data
+ * includes a rotation for nonlinearity
+ */
+static void mix_const_2( struct entropy_store *r )
+{
+	u32 *x;
+	unsigned long flags ;
+
+	x = r->A ;
+
+	spin_lock_irqsave( &constants_lock, flags ) ;
+	*x = ROTL( *x, 7 ) ;
+	pht512( x ) ;
+	spin_unlock_irqrestore( &constants_lock, flags ) ;
+}
+
+
+/*
  * mix the eight 128-bit constants[] for all pools
  * in place mixing, uses no external data
  *
@@ -2575,7 +2603,7 @@ static void mix_in( u8 *data, u32 nbytes, u8 *mul, u32 *accum)
  *
  * Algorithm here is
  *
- *     maybe mix constants r->A and r-o>B
+ *     maybe mix constants r->A and r->B
  *     initialise accumulator from r->A
  *     mix in data with multiplier r->B
  *         counter[] for any pool
@@ -2909,8 +2937,10 @@ static int get_any( u32 *out )
  * for input or blocking pool, this may block
  * for dummy or nonblocking, it will not
  */
-
 static u32 rekey_count = 0 ;
+
+/* How often do we want an expensive full mix? */
+#define FULL_MIX 16
 
 static void get128( struct entropy_store *r, u32 *out )
 {
@@ -2973,32 +3003,25 @@ static void get128( struct entropy_store *r, u32 *out )
 		 * every SAFE_OUT blocks) that we can
 		 * afford a somewhat expensive mix here
 		 */
-		switch( rekey_count )	{
-			/* do nothing here, only 128 bits since last mix */
-			case 0: case 2: case 4: case 6: case 8: case 10: case 12:
-				rekey_count++ ;
-				break ;
-			/* 256 bits mixed in since last mix */	 
-			case 1: case 5: case 9:
-				/* mix constants for blocking & non-blocking */
-				pht512(blocking_pool.A) ;
-				rekey_count++ ;
-				break ;
-			case 3: case 7: case 11:
-				/* mix constants for non-blocking & dummy */
-				pht512(r->A) ;
-				rekey_count++ ;
-				break ;
-			default:
-				/*
-				 * Mix all the pool constants
-				 * so the rekey affects all pools
-				 * This is the only full mix except
-				 * during initialisation
-				 */
-				mix_const_all() ;
-				rekey_count = 0 ;
-				break ;
+		if( rekey_count < FULL_MIX )	{
+			/*
+			 * do nothing for odd count, only 128 bits since last mix
+			 * mix for even count, 256 bits mixed in since last mix
+			 */
+			if( (rekey_count & 1) == 0)
+				/* mix constants for non-blocking & dummy pools */
+				mix_const_2( &nonblocking_pool ) ;
+			rekey_count++ ;
+		}
+		else	{
+			/*
+			 * Mix all the pool constants
+			 * so the rekey affects all pools
+			 * This is the only full mix except
+			 * during initialisation
+			 */
+			mix_const_all() ;
+			rekey_count = 0 ;
 		}
 
 		/* produce output */
@@ -3212,8 +3235,8 @@ static void init_random()
 	 * anything else. Either way, it will then affect
 	 * all future operations
 	 *
-	 * Simplest: XOR 256 bits into 8 words of counter[]
-	 * or with exactly 128, call buffer2counter()
+	 * Simplest: put 128 bits into counter[]
+	 * just call buffer2counter()
 	 */
  
 	mix_first( i, temp ) ;
@@ -3235,8 +3258,6 @@ static void init_random()
 	now = ktime_get_real() ;
 	mix_in( (u8 *) &now, sizeof(now), (u8 *) i->B, temp) ;
 
-	mix_in( (u8 *) utsname(), sizeof(*(utsname())), (u8 *) i->B, temp) ;
-
 	/*
 	 * ADD CODE HERE
 	 *
@@ -3247,9 +3268,10 @@ static void init_random()
 	 * just different on different systems
 	 * e.g. ethernet MAC, other hardware info.
 	 *
-	 * Existing code uses utsname(). That and if
-	 * possible more should be added here.
+	 * Existing code uses utsname() & I copy that
+	 * If possible more should be added here.
 	 */
+	mix_in( (u8 *) utsname(), sizeof(*(utsname())), (u8 *) i->B, temp) ;
 
 	mix_last( i, temp ) ;
 
@@ -3300,11 +3322,8 @@ static void init_random()
 		(void) load_constants() ;
 	}
 	else	{
-		/*
-		 * update counter[] and constants for dummy pool
-		 * before using them
-		 */
-		top_mix() ;
+		/* update counter[] before using it */
+		counter_any() ;
 		/*
 		 * mix pseudorandom bits into input pool
 		 * use cheap non-blocking source, dummy pool
@@ -3383,16 +3402,10 @@ static u32 loop_count = 0 ;
  */
 #define MAX_LOOPS 41
 
-/* constant from SHA-1 */
-#define COUNTER_DELTA 0x67452301
-
 /*
  * Code is based on my own work in the Enchilada cipher:
  * https://aezoo.compute.dtu.dk/doku.php?id=enchilada
  * That implements a 128-bit counter in 4 32-bit words
- *
- * Here counter[] is declared as 8 words; the others
- * are used only during updates, in buffer2counter()
  *
  * Add a constant instead of just incrementing, and include some
  * other operations, so Hamming weight changes more than for a
@@ -3517,8 +3530,13 @@ static void buffer2counter( u32 *data )
 	 */
 	counter[0] ^= jiffies ;
 
-	xor128( counter, data ) ;
-	pht128( counter ) ;
+	/* above uses XOR, so use addition here */
+	add128( counter, data ) ;
+	/*
+	 * XOR-based mixing
+	 * count() will mostly use addition
+	 */
+	aria_mix( (u8 *) counter ) ;
 
 	loop_count = 0 ;
 	iter_count = 0 ;
@@ -3526,7 +3544,6 @@ static void buffer2counter( u32 *data )
 	spin_unlock_irqrestore( &counter_lock, flags ) ;
 
 	zero128( data ) ;
-	clear_addmul() ;
 }
 
 static void counter_any( )

@@ -131,7 +131,6 @@ int main(int argc, char **argv)
  * Any of those choices might be changed, but all seem reasonable.
  */
 	printf("#define ARRAY_WORDS %d\n\n", ARRAY_WORDS) ;
-
 	do_block( ARRAY_WORDS, "constants" ) ;
 
 #endif /* CONFIG_RANDOM_GCM */
