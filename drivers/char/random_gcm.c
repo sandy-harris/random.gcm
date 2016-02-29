@@ -480,7 +480,7 @@ static struct entropy_store input_pool = {
 	.count = 0,
 	.size = INPUT_POOL_WORDS,
 	.p = pools,
-	.q = pools + (INPUT_POOL_WORDS/2),
+	.q = pools + 12,
 	.end = pools + INPUT_POOL_WORDS
 };
 
@@ -499,7 +499,7 @@ static struct entropy_store blocking_pool = {
 	.count = 0,
 	.size = OUTPUT_POOL_WORDS,
 	.p = pools + INPUT_POOL_WORDS,
-	.q = pools + INPUT_POOL_WORDS + (OUTPUT_POOL_WORDS/2),
+	.q = pools + INPUT_POOL_WORDS + 12,
 	.end = pools + INPUT_POOL_WORDS + OUTPUT_POOL_WORDS
 };
 
@@ -517,7 +517,7 @@ static struct entropy_store nonblocking_pool = {
 	.count = 0,
 	.size = OUTPUT_POOL_WORDS,
 	.p = pools + INPUT_POOL_WORDS + OUTPUT_POOL_WORDS,
-	.q = pools + INPUT_POOL_WORDS + OUTPUT_POOL_WORDS + (OUTPUT_POOL_WORDS/2),
+	.q = pools + INPUT_POOL_WORDS + OUTPUT_POOL_WORDS + 12,
 	.end = pools + INPUT_POOL_WORDS + (OUTPUT_POOL_WORDS*2)
 };
 
@@ -2749,7 +2749,6 @@ static void mix_last( struct entropy_store *r, u32 *accum )
 /*
  * Input pool rekeys from external data and maybe hardware rng
  * Blocking pool rekeys from the input pool before every output
- * Dummy pool gets its constants changed when top_mix() is used.
  *
  * In mix_first() all pools sometimes mix their own constants
  * and in mix_last() all non-dummy pools get feedback applied
@@ -3455,27 +3454,26 @@ static void count(void)
 		 * each element is used twice
 		 * once on left, once on right
 		 * pattern is circular
-		 * order chosen for fast mixing
 		 */
 		case 47:
-			counter[1] += counter[3] ;
+			counter[1] += counter[2] ;
 			break ;
 		case 101:
-			counter[2] += counter[1] ;
+			counter[2] += counter[3] ;
 			break ;
 		case 197:
-			counter[3] += counter[2] ;
+			counter[3] += counter[1] ;
 			break ;
 		/*
 		 * inject counter[0] into that loop
 		 * the loop and counter[0] use +=
 		 * so use ^= here
 		 *
-		 * inject into counter[2]
+		 * inject into counter[1]
 		 * so case 197 starts spreading the effect
 		 */
 		case 149:
-			counter[2] ^= counter[0] ;
+			counter[1] ^= counter[0] ;
 			break ;
 		/*
 		 * restart loop
