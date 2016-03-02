@@ -2314,25 +2314,8 @@ static void cube_mix( u32 *x )
  *********************************************************************/
 
 /*
- * mix one pool's constants array, two 128-bit rows
- * in place mixing, uses no external data
- * PHT + a rotation to make it nonlinear
- */
-static void mix_const_p( struct entropy_store *r )
-{
-	u32 *x ;
-	unsigned long flags ;
-
-	x = r->A ;
-
-	spin_lock_irqsave( &constants_lock, flags ) ;
-	*x = ROTL( *x, 5 ) ;
-	pht256( x ) ;
-	spin_unlock_irqrestore( &constants_lock, flags ) ; 
-}
-
-/*
- * Update both constants for a pool.
+ * Update one of the constants for a pool.
+ * alternate + and XOR, and which constant
  * Needs no rotations because mix_const_p() has one
  *
  * Every call to this affects every hash for that pool,
@@ -2351,19 +2334,53 @@ static void mix_const_p( struct entropy_store *r )
  */
 static void buffer2array( struct entropy_store *r, u32 *data )
 {
-	u32 *x;
+	u32 *a, *b;
 	unsigned long flags1, flags2 ;
 
-	x = r->A ;
-
+	a = r->A ;
+	b = r->B ;
 	spin_lock_irqsave( &r->lock, flags1 ) ;
 	spin_lock_irqsave( &constants_lock, flags2 ) ; 
-	xor128( x, data ) ;
-	pht256( x ) ;
+	switch( r->which )	{
+		case 0:
+			xor128(a,data)
+			r->which++ ;
+			break ;
+		case 1:
+			xor128(b,data)
+			r->which++ ;
+			break ;
+		case 2:
+			add128(a,data)
+			r->which++ ;
+			break ;
+		default:
+			add128(b,data)
+			r->which = 0 ;
+			break ;
+	}
 	spin_unlock_irqrestore( &constants_lock, flags2 ) ;
 	r->count = 0 ;
 	spin_unlock_irqrestore( &r->lock, flags1 ) ; 
 	zero128( data ) ;
+}
+
+/*
+ * mix one pool's constants array, two 128-bit rows
+ * in place mixing, uses no external data
+ * PHT + a rotation to make it nonlinear
+ */
+static void mix_const_p( struct entropy_store *r )
+{
+	u32 *x ;
+	unsigned long flags ;
+
+	x = r->A ;
+
+	spin_lock_irqsave( &constants_lock, flags ) ;
+	*x = ROTL( *x, 5 ) ;
+	pht256( x ) ;
+	spin_unlock_irqrestore( &constants_lock, flags ) ; 
 }
 
 /*
