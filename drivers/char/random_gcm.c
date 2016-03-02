@@ -2031,7 +2031,7 @@ EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
  * declare counter[] as a global since several routines
  * use it, initialise with five constants from SHA-1
  *
- * these values in counter[] are used only once
+ * the four values in counter[] are used only once
  * the very first output generated is then mixed in
  * after that, counter[] should be random
  */
@@ -2044,8 +2044,9 @@ static spinlock_t constants_lock ;
 /*********************************************************
  * unidirectional mixing operations
  *
- * both mix 128 bits from source into target
+ * two mix 128 bits from source into target
  * two ways: xor or additions
+ * third mixes 256 bits using addition
  ********************************************************/
 
 static void xor128(u32 *target, u32 *source)
@@ -2401,7 +2402,6 @@ static void mix_const_2( struct entropy_store *r )
 	pht512( x ) ;
 	spin_unlock_irqrestore( &constants_lock, flags ) ;
 }
-
 
 /*
  * mix the eight 128-bit constants[] for all pools
@@ -2815,7 +2815,7 @@ static void mix_last( struct entropy_store *r, u32 *accum )
  *
  * Using primes (just because), some possibilities are:
  *
- * with SAFE_OUT =   31,     almost   1,000 blocks
+ * with SAFE_OUT =   37,     over     1,000 blocks
  * with SAFE_OUT =  101,     over    10,000 blocks
  * with SAFE_OUT =  331,     over   100,000 blocks
  * with SAFE_OUT =  503,     over   250,000 blocks
