@@ -107,15 +107,20 @@ ifdef CONFIG_RANDOM_INIT
 init-file := include/generated/random_init.h
 used-file := scripts/gen_random
 source-file := $(used-file).c
+# want a new version of init-file for every compile
+# so make it depend on dummy file
+flag-file := scripts/dummy
 always  += $(init-file)
 targets  += $(init-file)
-$(init-file) : $(used-file)
-	$(Q) $(used-file) > $(init-file)
-ifdef CONFIG_RANDOM_GCM
-$(used-file) : $(source-file)
-	$(CC) $< -DCONFIG_RANDOM_GCM -o $@
-else
 $(used-file) : $(source-file)
 	$(CC) $< -o $@
+$(flag-file) :
+	touch $(flag-file)
+$(init-file) : $(used-file) $(flag-file)
+ifdef CONFIG_RANDOM_GCM
+	$(Q) $(used-file) -x > $(init-file)
+else
+	$(Q) $(used-file) > $(init-file)
 endif
+	$(Q) touch $(flag-file)
 endif
