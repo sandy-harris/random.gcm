@@ -1932,12 +1932,13 @@ EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
  * in the Open SSL version of this hash.
  *
  * Whether GCM is secure for this application needs
- * analysis. IPsec generates a 128-bit hash but uses
- * only 96 bits, which makes some attacks much harder;
- * this application uses all 128 bits. Also, the input
- * for IPsec authentication is ciphertext, which is
- * highly random with any decent cipher; input here is
- * mainly pool data which may be much less random.
+ * analysis. IPsec generates a 128-bit or larger hash
+ * but uses only 96 bits, which makes some attacks
+ * much harder; this application generates 128 bits
+ * and uses them all. Also, the input for IPsec
+ * authentication is ciphertext, highly random with
+ * any decent cipher; input here is mainly pool data
+ * which may be much less random.
  *
  * Existing random(4) code folds the 160-bit SHA-1
  * output to get an 80-bit final output; I do not
@@ -3021,10 +3022,10 @@ static void get128( struct entropy_store *r, u32 *out )
 		 */
 		if( rekey_count < FULL_MIX )	{
 			/*
-			 * do nothing for odd count, only 128 bits since last mix
-			 * mix for even count, 256 bits mixed in since last mix
+			 * do nothing for even count, only 128 bits since last mix
+			 * mix for odd count, 256 bits mixed in since last mix
 			 */
-			if( (rekey_count & 1) == 0)
+			if( rekey_count & 1 )
 				/* mix constants for non-blocking & dummy pools */
 				mix_const_2( &nonblocking_pool ) ;
 			rekey_count++ ;
