@@ -1885,7 +1885,7 @@ void add_hwgenerator_randomness(const char *buffer, size_t count,
 }
 EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
 
-/*
+/*******************************************************************
  * Experimental code to replace parts of random.c
  * Everything from here down is new code.
  * Sandy Harris, sandyinchina@gmail.com
@@ -2026,7 +2026,64 @@ EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
  * It would also be possible, of course, to detect and
  * log unexpected cases, but it is not clear that this
  * would be of much value.
+ ************************************************************/
+
+static spinlock_t counter_lock ;
+static spinlock_t constants_lock ;
+
+static void add128( u32 *, u32 *) ;
+static void xor128( u32 *, u32 *) ;
+static void aria_mix( u8 * ) ;
+
+/*****************************************************************
+ * 128-bit counter to mix in when hashing
+ *
+ * There is only one counter[] and three functions to update it,
+ * count() to iterate it, buffer2counter() or counter_any()
+ * to re-initialise it with a new starting value
+ * 
+ * mix_first() uses counter[] and calls count(), so the count both
+ * affects and is affected by all output operations on any pool.
+ *
+ * Operations on this counter do not affect the per-pool counts
+ * for any pool, neither the entropy count nor the r->count
+ * iteration counter.
+ *
+ * One reason for including the counter is that it allows fast
+ * initialisation. The very first output from the input pool is
+ * used to update the counter. Once that is done, even if the
+ * pools were all worthless, every output operation would still
+ * have at least the strength of hash(constants, counter) which
+ * is very roughly equivalent to a counter mode block cipher
+ * encrypt(key,counter).
+ *
+ * mix_first() mixes in the counter so it affects all output from
+ * any pool and all feedback into any pool. Every operation on any
+ * pool changes the counter, so it automatically influences all the
+ * other pools, albeit in an indirect and quite limited way.
+ *
+ * This can contribute to recovery after an rng state compromise.
+ * Even knowing the counter value at one time an enemy cannot infer
+ * the future effects unless he can predict the order of future
+ * output operations, which depends on data requests from all sources.
+ * Nor can he work backwards to get previous outputs unless he knows
+ * the order of previous operations.
+ *
+ * This may provide almost no protection on a simple embedded system
+ * or over a very short time span, since in those cases an enemy
+ * might guess the sequence of operations or search through some
+ * moderate number of possibilties. However it should be quite
+ * effective for more complex systems and longer time spans. 
+ ****************************************************************/
+
+static u32 iter_count = 0 ;
+static u32 loop_count = 0 ;
+
+/*
+ * 41 times 251 iterations per loop
+ * gives about 10,000 outputs before auto-rekey
  */
+#define MAX_LOOPS 41
 
 /*
  * declare counter[] as a global since several routines
@@ -2039,8 +2096,155 @@ EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
 #define COUNTER_DELTA 0x67452301
 static u32 counter[] = {0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0} ;
 
-static spinlock_t counter_lock ;
-static spinlock_t constants_lock ;
+/*
+ * Code is based on my own work in the Enchilada cipher:
+ * https://aezoo.compute.dtu.dk/doku.php?id=enchilada
+ * That implements a 128-bit counter in 4 32-bit words
+ *
+ * Add a constant instead of just incrementing, and include some
+ * other operations, so Hamming weight changes more than for a
+ * simple counter. Mix +, XOR and rotation so it is nonlinear.
+ *
+ * This may not be strictly necessary, but a simple counter can
+ * be considered safe only if you trust the crypto completely.
+ * Low Hamming weight differences in inputs do allow some attacks
+ * on block ciphers or hashes and the high bits of a large counter
+ * that is only incremented do not change for aeons.
+ *
+ * The extra code here is cheap insurance.
+ *
+ * For discussion, see mailing list thread starting at:
+ * http://www.metzdowd.com/pipermail/cryptography/2014-May/021345.html
+ */
+
+static void count(void)
+{
+	int reseed ;
+	unsigned long flags ;
+
+	/*
+	 * There should be enough other rekeying that
+	 * this is quite rare. This is just here for
+	 * safety, much as IPsec rekeys after 2^32
+	 * blocks if no other rekeying is done.
+	 */
+	spin_lock_irqsave( &counter_lock, flags ) ;
+	reseed = (loop_count >= MAX_LOOPS) ;
+	spin_unlock_irqrestore( &counter_lock, flags ) ;
+	if( reseed )
+		counter_any() ;
+
+	spin_lock_irqsave( &counter_lock, flags ) ;
+
+	/*
+	 * Limit the switch to < 256 cases
+	 * should work with any CPU & compiler
+	 *
+	 * Five constants used, all primes
+	 * roughly evenly spaced, around 50, 100, 150, 200, 250
+	 */
+	switch( iter_count )	{
+		/*
+		 * mix three array elements
+		 * each element is used twice
+		 * once on left, once on right
+		 * pattern is circular
+		 */
+		case 47:
+			counter[1] += counter[2] ;
+			break ;
+		case 101:
+			counter[2] += counter[3] ;
+			break ;
+		case 197:
+			counter[3] += counter[1] ;
+			break ;
+		/*
+		 * inject counter[0] into that loop
+		 * the loop and counter[0] use +=
+		 * so use ^= here
+		 *
+		 * inject into counter[1]
+		 * so case 197 starts spreading the effect
+		 */
+		case 149:
+			counter[1] ^= counter[0] ;
+			break ;
+		/*
+		 * restart loop
+		 * throw in rotations for nonlinearity
+		 */
+		case 251:
+			counter[1] = ROTL( counter[1], 3) ;
+			counter[2] = ROTL( counter[2], 7) ;
+			counter[3] = ROTL( counter[3], 13) ;
+			iter_count = 0 ;
+			loop_count++ ;
+			break ;
+		/*
+		 * for 247 out of every 252 iterations
+		 * the switch does nothing
+		 */ 
+		default:
+			break ;
+	}
+	/*
+	 * counter[0] is purely a counter
+	 * nothing above affects it
+	 * uses += instead of ++ to change Hamming weight more
+	 *
+	 * would repeat after 2^32 iterations
+	 * not a problem since the rest of counter[] changes too
+	 * and 2^32 will not be reached
+	 */
+	counter[0] += COUNTER_DELTA ;
+	iter_count++ ;
+
+	spin_unlock_irqrestore( &counter_lock, flags ) ;
+}
+
+/*
+ * code to set a new counter value
+ *
+ * All buffer2*() routines
+ *    expect 128 bits of input
+ *    zero the input data after using it
+ */
+static void buffer2counter( u32 *data )
+{
+	unsigned long flags ;
+
+	spin_lock_irqsave( &counter_lock, flags ) ;
+	/*
+	 * timing data is used elsewhere in driver
+	 * and we do not want an expensive operation
+	 * here, so use simplest thing that makes
+	 * every call different
+	 */
+	counter[0] ^= jiffies ;
+
+	/* above uses XOR, so use addition here */
+	add128( counter, data ) ;
+	/*
+	 * XOR-based mixing
+	 * count() will mostly use addition
+	 */
+	aria_mix( (u8 *) counter ) ;
+
+	loop_count = 0 ;
+	iter_count = 0 ;
+
+	spin_unlock_irqrestore( &counter_lock, flags ) ;
+
+	zero128( data ) ;
+}
+
+static void counter_any( )
+{
+	u32 temp[4] ;
+	(void) get_any( temp ) ;
+	buffer2counter( temp ) ;
+}
 
 /*********************************************************
  * unidirectional mixing operations
@@ -2345,19 +2549,19 @@ static void buffer2array( struct entropy_store *r, u32 *data )
 	spin_lock_irqsave( &constants_lock, flags2 ) ; 
 	switch( r->which )	{
 		case 0:
-			xor128(a,data)
+			xor128(a,data) ;
 			r->which++ ;
 			break ;
 		case 1:
-			xor128(b,data)
+			xor128(b,data) ;
 			r->which++ ;
 			break ;
 		case 2:
-			add128(a,data)
+			add128(a,data) ;
 			r->which++ ;
 			break ;
 		default:
-			add128(b,data)
+			add128(b,data) ;
 			r->which = 0 ;
 			break ;
 	}
@@ -3367,206 +3571,6 @@ static void init_random()
 
 	/* output should use a different counter[] value */
 	counter_any() ;	
-}
-
-/*****************************************************************
- * 128-bit counter to mix in when hashing
- *
- * There is only one counter[] and three functions to update it,
- * count() to iterate it, buffer2counter() or counter_any()
- * to re-initialise it with a new starting value
- * 
- * mix_first() uses counter[] and calls count(), so the count both
- * affects and is affected by all output operations on any pool.
- *
- * Operations on this counter do not affect the per-pool counts
- * for any pool, neither the entropy count nor the r->count
- * iteration counter.
- *
- * One reason for including the counter is that it allows fast
- * initialisation. The very first output from the input pool is
- * used to update the counter. Once that is done, even if the
- * pools were all worthless, every output operation would still
- * have at least the strength of hash(constants, counter) which
- * is very roughly equivalent to a counter mode block cipher
- * encrypt(key,counter).
- *
- * mix_first() mixes in the counter so it affects all output from
- * any pool and all feedback into any pool. Every operation on any
- * pool changes the counter, so it automatically influences all the
- * other pools, albeit in an indirect and quite limited way.
- *
- * This can contribute to recovery after an rng state compromise.
- * Even knowing the counter value at one time an enemy cannot infer
- * the future effects unless he can predict the order of future
- * output operations, which depends on data requests from all sources.
- * Nor can he work backwards to get previous outputs unless he knows
- * the order of previous operations.
- *
- * This may provide almost no protection on a simple embedded system
- * or over a very short time span, since in those cases an enemy
- * might guess the sequence of operations or search through some
- * moderate number of possibilties. However it should be quite
- * effective for more complex systems and longer time spans. 
- ****************************************************************/
-
-static u32 iter_count = 0 ;
-static u32 loop_count = 0 ;
-
-/*
- * 41 times 251 iterations per loop
- * gives about 10,000 outputs before auto-rekey
- */
-#define MAX_LOOPS 41
-
-/*
- * Code is based on my own work in the Enchilada cipher:
- * https://aezoo.compute.dtu.dk/doku.php?id=enchilada
- * That implements a 128-bit counter in 4 32-bit words
- *
- * Add a constant instead of just incrementing, and include some
- * other operations, so Hamming weight changes more than for a
- * simple counter. Mix +, XOR and rotation so it is nonlinear.
- *
- * This may not be strictly necessary, but a simple counter can
- * be considered safe only if you trust the crypto completely.
- * Low Hamming weight differences in inputs do allow some attacks
- * on block ciphers or hashes and the high bits of a large counter
- * that is only incremented do not change for aeons.
- *
- * The extra code here is cheap insurance.
- *
- * For discussion, see mailing list thread starting at:
- * http://www.metzdowd.com/pipermail/cryptography/2014-May/021345.html
- */
-
-static void count(void)
-{
-	int reseed ;
-	unsigned long flags ;
-
-	/*
-	 * There should be enough other rekeying that
-	 * this is quite rare. This is just here for
-	 * safety, much as IPsec rekeys after 2^32
-	 * blocks if no other rekeying is done.
-	 */
-	spin_lock_irqsave( &counter_lock, flags ) ;
-	reseed = (loop_count >= MAX_LOOPS) ;
-	spin_unlock_irqrestore( &counter_lock, flags ) ;
-	if( reseed )
-		counter_any() ;
-
-	spin_lock_irqsave( &counter_lock, flags ) ;
-
-	/*
-	 * Limit the switch to < 256 cases
-	 * should work with any CPU & compiler
-	 *
-	 * Five constants used, all primes
-	 * roughly evenly spaced, around 50, 100, 150, 200, 250
-	 */
-	switch( iter_count )	{
-		/*
-		 * mix three array elements
-		 * each element is used twice
-		 * once on left, once on right
-		 * pattern is circular
-		 */
-		case 47:
-			counter[1] += counter[2] ;
-			break ;
-		case 101:
-			counter[2] += counter[3] ;
-			break ;
-		case 197:
-			counter[3] += counter[1] ;
-			break ;
-		/*
-		 * inject counter[0] into that loop
-		 * the loop and counter[0] use +=
-		 * so use ^= here
-		 *
-		 * inject into counter[1]
-		 * so case 197 starts spreading the effect
-		 */
-		case 149:
-			counter[1] ^= counter[0] ;
-			break ;
-		/*
-		 * restart loop
-		 * throw in rotations for nonlinearity
-		 */
-		case 251:
-			counter[1] = ROTL( counter[1], 3) ;
-			counter[2] = ROTL( counter[2], 7) ;
-			counter[3] = ROTL( counter[3], 13) ;
-			iter_count = 0 ;
-			loop_count++ ;
-			break ;
-		/*
-		 * for 247 out of every 252 iterations
-		 * the switch does nothing
-		 */ 
-		default:
-			break ;
-	}
-	/*
-	 * counter[0] is purely a counter
-	 * nothing above affects it
-	 * uses += instead of ++ to change Hamming weight more
-	 *
-	 * would repeat after 2^32 iterations
-	 * not a problem since the rest of counter[] changes too
-	 * and 2^32 will not be reached
-	 */
-	counter[0] += COUNTER_DELTA ;
-	iter_count++ ;
-
-	spin_unlock_irqrestore( &counter_lock, flags ) ;
-}
-
-/*
- * code to set a new counter value
- *
- * All buffer2*() routines
- *    expect 128 bits of input
- *    zero the input data after using it
- */
-static void buffer2counter( u32 *data )
-{
-	unsigned long flags ;
-
-	spin_lock_irqsave( &counter_lock, flags ) ;
-	/*
-	 * timing data is used elsewhere in driver
-	 * and we do not want an expensive operation
-	 * here, so use simplest thing that makes
-	 * every call different
-	 */
-	counter[0] ^= jiffies ;
-
-	/* above uses XOR, so use addition here */
-	add128( counter, data ) ;
-	/*
-	 * XOR-based mixing
-	 * count() will mostly use addition
-	 */
-	aria_mix( (u8 *) counter ) ;
-
-	loop_count = 0 ;
-	iter_count = 0 ;
-
-	spin_unlock_irqrestore( &counter_lock, flags ) ;
-
-	zero128( data ) ;
-}
-
-static void counter_any( )
-{
-	u32 temp[4] ;
-	(void) get_any( temp ) ;
-	buffer2counter( temp ) ;
 }
 
 /****************************************************************
