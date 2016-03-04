@@ -2945,7 +2945,7 @@ static int get_any( u32 *out )
 		return 3 ;
 
 	/* dummy pool always succeeds */
-	get128( &dummy_pool, out ) ;
+	mix_first( &dummy_pool, out ) ;
 	return 4 ;
 }
 
