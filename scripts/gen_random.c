@@ -75,6 +75,13 @@
 #define OUTPUT_POOL_SHIFT	10
 #define OUTPUT_POOL_WORDS	(1 << (OUTPUT_POOL_SHIFT-5))
 
+/*
+ * This will need to change if patches from either Ted Ts'o
+ * or Stephan Mueller that replace output pools with DBRG
+ * structures are accepted. Stephan replaces both, Ted (as
+ * of mid-June 2016) only only one. Ted's patches are very
+ * likely to be accepted since he is the driver maintainer.
+ */
 #define TOTAL_POOL_WORDS  (INPUT_POOL_WORDS + 2*OUTPUT_POOL_WORDS)
 
 /* not always used, but define anyway */
@@ -126,8 +133,9 @@ int main(int argc, char **argv)
 	do_block( TOTAL_POOL_WORDS, "pools" ) ;
 
 	/*
-	 * If we are using the GCM hash, set up an array of random
-	 * constants for it.
+	 * If we are using the GCM hash, as proposed in some of my
+	 * other patches (not, I think, likely to be accepted),
+	 * then set up an array of random constants for it.
 	 *
 	 * The choice of 32 words (eight 128-bit rows, 1024 bits) for
 	 * this is partly arbitrary, partly reasoned. 256 bits would
@@ -173,7 +181,7 @@ void do_block( int nwords, char *name )
 	/* normal case: we have memory */
 	x = read( urandom, data, nbytes ) ;
 	if( x != nbytes )	{
-		fprintf(stderr,"gen_random_int: read() failed, cannot contiue\n") ;
+		fprintf(stderr,"gen_random_int: read() failed, cannot continue\n") ;
                 exit(1) ;
         }
 
