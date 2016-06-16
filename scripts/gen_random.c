@@ -79,8 +79,8 @@
  * This will need to change if patches from either Ted Ts'o
  * or Stephan Mueller that replace output pools with DBRG
  * structures are accepted. Stephan replaces both, Ted (as
- * of mid-June 2016) only only one. Ted's patches are very
- * likely to be accepted since he is the driver maintainer.
+ * of mid-June 2016) only one. Ted is the driver maintainer
+ * so his patches are almost certain to be accepted.
  */
 #define TOTAL_POOL_WORDS  (INPUT_POOL_WORDS + 2*OUTPUT_POOL_WORDS)
 
