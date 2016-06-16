@@ -101,7 +101,7 @@ int main(int argc, char **argv)
 {
 	int flag ;
 	if( (urandom = open("/dev/urandom", O_RDONLY)) == -1 )  {
-		fprintf(stderr, "gen_random_init: no /dev/urandom, cannot continue\n") ;
+		fprintf(stderr, "gen_random: no /dev/urandom, cannot continue\n") ;
 		exit(1) ;
 	}
 	switch( argc )	{
@@ -174,7 +174,7 @@ void do_block( int nwords, char *name )
 	nbytes = 4 * nwords ;
 
 	if( (data = calloc( (size_t) nwords, 4)) == NULL )  {
-		fprintf(stderr, "gen_random_init: calloc() failed, cannot continue\n") ;
+		fprintf(stderr, "gen_random: calloc() failed, cannot continue\n") ;
 		exit(1) ;
 	}
 
@@ -215,7 +215,7 @@ void do_block( int nwords, char *name )
 
 void usage()
 {
-	fprintf(stderr, "usage: gen_random_init [-x]\n") ;
+	fprintf(stderr, "usage: gen_random [-x]\n") ;
 	exit(1) ;
 }
 
